@@ -16,6 +16,26 @@ services:
       timeout: 5s
       retries: 15
 
+  edge-worker:
+    build:
+      context: ./edge_worker
+    restart: unless-stopped
+    environment:
+      EDGE_DB_HOST: postgres
+      EDGE_DB_PORT: "5432"
+      EDGE_DB_NAME: ${POSTGRES_DB}
+      EDGE_DB_USER: ${POSTGRES_USER}
+      EDGE_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      EDGE_DB_SCHEMA: edge_ingest
+      TZ: Asia/Taipei
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # 安全起見，先不對外開 8000；n8n 會用 docker 內網呼叫
+    # 如需除錯可暫時打開：
+    # ports:
+    #   - "8000:8000"
+
   n8n:
     image: docker.n8n.io/n8nio/n8n:latest
     restart: unless-stopped
@@ -39,7 +59,6 @@ services:
       TZ: ${TZ}
       GENERIC_TIMEZONE: ${GENERIC_TIMEZONE}
 
-      # 降低 RAM 峰值（之後若處理二進位會用到）
       N8N_DEFAULT_BINARY_DATA_MODE: filesystem
       N8N_BINARY_DATA_STORAGE_PATH: /data/binary
 
@@ -51,6 +70,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      edge-worker:
+        condition: service_started
 
 volumes:
   postgres_data:
