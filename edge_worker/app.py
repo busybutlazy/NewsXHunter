@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Tuple
 import psycopg
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+from psycopg.types.json import Jsonb
 
 APP_SCHEMA = os.getenv("EDGE_DB_SCHEMA", "edge_ingest")
 
@@ -100,7 +101,9 @@ def _validate_source(conn: psycopg.Connection, source: SourceCtx) -> None:
 @app.post("/v1/ingest/rawitem", response_model=RawItemOut)
 def ingest_rawitem(req: IngestReq):
     data, _ = _canonicalize(req.source, req.item)
-
+    db_data = dict(data)
+    db_data["rights"] = Jsonb(db_data["rights"])
+    db_data["raw"] = Jsonb(db_data["raw"])
     with psycopg.connect(db_dsn()) as conn:
         _validate_source(conn, req.source)
 
@@ -109,13 +112,13 @@ def ingest_rawitem(req: IngestReq):
         (item_id, source_id, source_key, url, title, summary, published_at, fetched_at, lang, dedup_key, rights, raw, status)
         VALUES
         (%(item_id)s, %(source_id)s, %(source_key)s, %(url)s, %(title)s, %(summary)s, %(published_at)s, %(fetched_at)s,
-         %(lang)s, %(dedup_key)s, %(rights)s::jsonb, %(raw)s::jsonb, %(status)s)
+         %(lang)s, %(dedup_key)s, %(rights)s, %(raw)s, %(status)s)
         ON CONFLICT (dedup_key) DO UPDATE
           SET fetched_at = EXCLUDED.fetched_at
         RETURNING (xmax = 0) AS inserted;
         """
         with conn.cursor() as cur:
-            cur.execute(q, data)
+            cur.execute(q, db_data)
             row = cur.fetchone()
             inserted = bool(row[0]) if row else False
 
