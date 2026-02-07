@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 import psycopg
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from psycopg.types.json import Jsonb
 
@@ -19,7 +19,7 @@ def db_dsn() -> str:
     password = os.getenv("EDGE_DB_PASSWORD", "")
     return f"host={host} port={port} dbname={name} user={user} password={password}"
 
-app = FastAPI(title="edge-worker", version="1.0.0")
+router = APIRouter()
 
 class SourceCtx(BaseModel):
     source_id: int
@@ -98,7 +98,7 @@ def _normalize_rights(value: Any) -> str:
     except TypeError:
         return str(value)
 
-@app.get("/healthz")
+@router.get("/healthz")
 def healthz():
     return {"ok": True}
 
@@ -146,7 +146,7 @@ def _validate_source(conn: psycopg.Connection, source: SourceCtx) -> None:
         if cur.fetchone() is None:
             raise HTTPException(status_code=400, detail="Invalid or disabled source")
 
-@app.post("/v1/ingest/rawitem", response_model=RawItemOut)
+@router.post("/ingest/rawitem", response_model=RawItemOut)
 def ingest_rawitem(req: IngestReq):
     data, _ = _canonicalize(req.source, req.item)
     with psycopg.connect(db_dsn()) as conn:
