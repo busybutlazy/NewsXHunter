@@ -1,6 +1,8 @@
 services:
   postgres:
     image: postgres:16-alpine
+    ports:
+      - "127.0.0.1:5432:5432"
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -67,6 +69,7 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
       - n8n_binary:/data/binary
+      - ./n8n_backups:/exports
     depends_on:
       postgres:
         condition: service_healthy
