@@ -35,8 +35,8 @@ services:
         condition: service_healthy
     # 安全起見，先不對外開 8000；n8n 會用 docker 內網呼叫
     # 如需除錯可暫時打開：
-    # ports:
-    #   - "8000:8000"
+    ports:
+      - "8000:8000"
 
   n8n:
     image: docker.n8n.io/n8nio/n8n
