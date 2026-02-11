@@ -17,7 +17,7 @@ docker compose exec -u node n8n n8n export:credentials --all --separate --output
 ### 匯入
 匯入備份的n8n workflow 和 credentials
 ```bash
-docker compose exec -u node n8n n8n import:workflows --separate --input=/exports/workflows/
+docker compose exec -u node n8n n8n import:workflow --separate --input=/exports/workflows/
 
 docker compose exec -u node n8n n8n import:credentials --separate --input=/exports/credentials/
 ```

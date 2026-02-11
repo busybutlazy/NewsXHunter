@@ -34,6 +34,32 @@ CREATE TABLE IF NOT EXISTS edge_ingest.raw_items (
   status       TEXT NOT NULL DEFAULT 'RAW'
 );
 
+CREATE TABLE IF NOT EXISTS edge_ingest.item_translations (
+  id                BIGSERIAL PRIMARY KEY,
+  raw_item_id       BIGINT NOT NULL
+    REFERENCES edge_ingest.raw_items(id) ON DELETE CASCADE,
+  target_lang       TEXT NOT NULL,
+  translated_title   TEXT,
+  translated_summary TEXT,
+  translated_content TEXT,
+  engine_provider    TEXT,
+  model              TEXT NOT NULL DEFAULT '',
+  prompt_version     TEXT NOT NULL DEFAULT '',
+  source_text_hash   TEXT NOT NULL DEFAULT '',
+  status             TEXT NOT NULL DEFAULT 'QUEUED',
+  error_message      TEXT,
+  meta               JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_item_translations_status
+    CHECK (status IN ('QUEUED','PROCESSING','DONE','FAILED')),
+  CONSTRAINT chk_item_translations_hash
+    CHECK (
+      source_text_hash = ''
+      OR source_text_hash ~ '^[0-9a-f]{64}$'
+    )
+);
+
 -- 0) 確保 schema 存在
 CREATE SCHEMA IF NOT EXISTS edge_ingest;
 
@@ -106,4 +132,3 @@ CREATE INDEX IF NOT EXISTS idx_edge_ingest_n8n_runlog_createdat
 CREATE INDEX IF NOT EXISTS idx_raw_items_published_at ON edge_ingest.raw_items (published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_raw_items_source_id ON edge_ingest.raw_items (source_id);
 CREATE INDEX IF NOT EXISTS idx_raw_items_status ON edge_ingest.raw_items (status);
-
