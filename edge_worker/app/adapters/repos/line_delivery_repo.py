@@ -16,22 +16,65 @@ class LineDeliveryRepo:
         line_user_id: str,
         display_name: Optional[str] = None,
         preferred_lang: str = "zh-TW",
+        is_active: bool = True,
     ) -> int:
         query = f"""
-        INSERT INTO {APP_SCHEMA}.users (line_user_id, display_name, preferred_lang, updated_at)
-        VALUES (%s, %s, %s, NOW())
+        INSERT INTO {APP_SCHEMA}.users (line_user_id, display_name, preferred_lang, is_active, updated_at)
+        VALUES (%s, %s, %s, %s, NOW())
         ON CONFLICT (line_user_id) DO UPDATE
           SET display_name = COALESCE(EXCLUDED.display_name, {APP_SCHEMA}.users.display_name),
               preferred_lang = COALESCE(EXCLUDED.preferred_lang, {APP_SCHEMA}.users.preferred_lang),
+              is_active = EXCLUDED.is_active,
               updated_at = NOW()
         RETURNING id;
         """
 
         with psycopg.connect(self.dsn) as conn:
             with conn.cursor() as cur:
-                cur.execute(query, (line_user_id, display_name, preferred_lang))
+                cur.execute(query, (line_user_id, display_name, preferred_lang, is_active))
                 row = cur.fetchone()
                 return int(row[0])
+
+    def set_user_active(self, *, line_user_id: str, is_active: bool) -> bool:
+        query = f"""
+        UPDATE {APP_SCHEMA}.users
+        SET is_active = %s, updated_at = NOW()
+        WHERE line_user_id = %s
+        RETURNING id;
+        """
+        with psycopg.connect(self.dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (is_active, line_user_id))
+                return cur.fetchone() is not None
+
+    def register_webhook_event(
+        self,
+        *,
+        line_event_id: str,
+        event_type: str,
+        line_user_id: Optional[str],
+        payload: Dict[str, Any],
+    ) -> bool:
+        query = f"""
+        INSERT INTO {APP_SCHEMA}.line_webhook_events
+          (line_event_id, event_type, line_user_id, payload)
+        VALUES
+          (%s, %s, %s, %s)
+        ON CONFLICT (line_event_id) DO NOTHING
+        RETURNING id;
+        """
+        with psycopg.connect(self.dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    (
+                        line_event_id,
+                        event_type,
+                        line_user_id,
+                        Jsonb(payload),
+                    ),
+                )
+                return cur.fetchone() is not None
 
     def fetch_push_source(self, raw_item_id: int) -> Optional[Dict[str, Any]]:
         query = f"""
