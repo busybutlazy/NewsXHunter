@@ -2,7 +2,7 @@ import os
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
-from app.api import rss_update_router
+from app.api import agents_router, rss_update_router
 
 
 load_dotenv()
@@ -28,3 +28,4 @@ def healthz():
 #     }
 
 app.include_router(rss_update_router, prefix='/v1/rss')
+app.include_router(agents_router, prefix='/v1/agents')
