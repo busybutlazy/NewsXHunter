@@ -132,3 +132,188 @@ CREATE INDEX IF NOT EXISTS idx_edge_ingest_n8n_runlog_createdat
 CREATE INDEX IF NOT EXISTS idx_raw_items_published_at ON edge_ingest.raw_items (published_at DESC);
 CREATE INDEX IF NOT EXISTS idx_raw_items_source_id ON edge_ingest.raw_items (source_id);
 CREATE INDEX IF NOT EXISTS idx_raw_items_status ON edge_ingest.raw_items (status);
+
+-- =========================================
+-- Conversational Agents / LINE / QA / RAG
+-- =========================================
+
+DO $$
+BEGIN
+  IF to_regtype('edge_ingest.agent_name') IS NULL THEN
+    CREATE TYPE edge_ingest.agent_name AS ENUM ('Bard', 'Lorekeeper');
+  END IF;
+END$$;
+
+DO $$
+BEGIN
+  IF to_regtype('edge_ingest.delivery_status') IS NULL THEN
+    CREATE TYPE edge_ingest.delivery_status AS ENUM ('PENDING', 'SENT', 'FAILED');
+  END IF;
+END$$;
+
+DO $$
+BEGIN
+  IF to_regtype('edge_ingest.query_status') IS NULL THEN
+    CREATE TYPE edge_ingest.query_status AS ENUM ('ANSWERED', 'REJECTED', 'FAILED');
+  END IF;
+END$$;
+
+CREATE TABLE IF NOT EXISTS edge_ingest.users (
+  id                BIGSERIAL PRIMARY KEY,
+  line_user_id      TEXT NOT NULL UNIQUE,
+  display_name      TEXT,
+  preferred_lang    TEXT NOT NULL DEFAULT 'zh-TW',
+  timezone          TEXT NOT NULL DEFAULT 'Asia/Taipei',
+  is_active         BOOLEAN NOT NULL DEFAULT TRUE,
+  daily_question_limit INTEGER NOT NULL DEFAULT 5 CHECK (daily_question_limit > 0),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS edge_ingest.agent_runs (
+  id                BIGSERIAL PRIMARY KEY,
+  agent             edge_ingest.agent_name NOT NULL,
+  user_id           BIGINT REFERENCES edge_ingest.users(id) ON DELETE SET NULL,
+  raw_item_id       BIGINT REFERENCES edge_ingest.raw_items(id) ON DELETE SET NULL,
+  query_id          BIGINT,
+  provider          TEXT NOT NULL DEFAULT '',
+  model             TEXT NOT NULL DEFAULT '',
+  prompt_version    TEXT NOT NULL DEFAULT '',
+  input_tokens      INTEGER NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
+  output_tokens     INTEGER NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
+  total_tokens      INTEGER NOT NULL DEFAULT 0 CHECK (total_tokens >= 0),
+  latency_ms        INTEGER CHECK (latency_ms IS NULL OR latency_ms >= 0),
+  status            TEXT NOT NULL DEFAULT 'DONE',
+  error_message     TEXT,
+  meta              JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS edge_ingest.line_push_messages (
+  id                BIGSERIAL PRIMARY KEY,
+  user_id           BIGINT NOT NULL REFERENCES edge_ingest.users(id) ON DELETE CASCADE,
+  raw_item_id       BIGINT REFERENCES edge_ingest.raw_items(id) ON DELETE SET NULL,
+  translation_id    BIGINT REFERENCES edge_ingest.item_translations(id) ON DELETE SET NULL,
+  agent_run_id      BIGINT REFERENCES edge_ingest.agent_runs(id) ON DELETE SET NULL,
+  target_line_user_id TEXT NOT NULL,
+  title             TEXT NOT NULL,
+  message_body      TEXT NOT NULL,
+  payload           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status            edge_ingest.delivery_status NOT NULL DEFAULT 'PENDING',
+  line_request_id   TEXT,
+  error_message     TEXT,
+  sent_at           TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS edge_ingest.user_daily_question_usage (
+  id                BIGSERIAL PRIMARY KEY,
+  user_id           BIGINT NOT NULL REFERENCES edge_ingest.users(id) ON DELETE CASCADE,
+  usage_date        DATE NOT NULL,
+  used_count        INTEGER NOT NULL DEFAULT 0 CHECK (used_count >= 0),
+  limit_count       INTEGER NOT NULL DEFAULT 5 CHECK (limit_count > 0),
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_user_daily_usage UNIQUE (user_id, usage_date)
+);
+
+CREATE TABLE IF NOT EXISTS edge_ingest.user_queries (
+  id                BIGSERIAL PRIMARY KEY,
+  user_id           BIGINT NOT NULL REFERENCES edge_ingest.users(id) ON DELETE CASCADE,
+  question_text     TEXT NOT NULL,
+  answer_text       TEXT,
+  status            edge_ingest.query_status NOT NULL DEFAULT 'ANSWERED',
+  rejected_reason   TEXT,
+  rag_provider      TEXT NOT NULL DEFAULT 'arango',
+  rag_space_key     TEXT NOT NULL DEFAULT 'default',
+  rag_mode          TEXT NOT NULL DEFAULT 'vector',
+  rag_refs          JSONB NOT NULL DEFAULT '[]'::jsonb,
+  graph_plan        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  asked_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  answered_at       TIMESTAMPTZ
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'fk_agent_runs_query'
+  ) THEN
+    ALTER TABLE edge_ingest.agent_runs
+      ADD CONSTRAINT fk_agent_runs_query
+      FOREIGN KEY (query_id) REFERENCES edge_ingest.user_queries(id) ON DELETE SET NULL;
+  END IF;
+END$$;
+
+CREATE TABLE IF NOT EXISTS edge_ingest.rag_spaces (
+  id                BIGSERIAL PRIMARY KEY,
+  space_key         TEXT NOT NULL UNIQUE,
+  display_name      TEXT NOT NULL,
+  backend           TEXT NOT NULL DEFAULT 'arango',
+  mode              TEXT NOT NULL DEFAULT 'vector',
+  is_graph_enabled  BOOLEAN NOT NULL DEFAULT TRUE,
+  graph_namespace   TEXT NOT NULL DEFAULT 'default_graph',
+  description       TEXT,
+  config            JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS edge_ingest.rag_graph_nodes (
+  id                BIGSERIAL PRIMARY KEY,
+  space_id          BIGINT NOT NULL REFERENCES edge_ingest.rag_spaces(id) ON DELETE CASCADE,
+  external_node_id  TEXT NOT NULL,
+  node_type         TEXT NOT NULL DEFAULT 'entity',
+  properties        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_rag_graph_node UNIQUE (space_id, external_node_id)
+);
+
+CREATE TABLE IF NOT EXISTS edge_ingest.rag_graph_edges (
+  id                BIGSERIAL PRIMARY KEY,
+  space_id          BIGINT NOT NULL REFERENCES edge_ingest.rag_spaces(id) ON DELETE CASCADE,
+  from_external_node_id TEXT NOT NULL,
+  to_external_node_id   TEXT NOT NULL,
+  relation_type     TEXT NOT NULL DEFAULT 'related_to',
+  properties        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO edge_ingest.rag_spaces (
+  space_key,
+  display_name,
+  backend,
+  mode,
+  is_graph_enabled,
+  graph_namespace,
+  description
+)
+VALUES (
+  'default',
+  'Default Lorekeeper Space',
+  'arango',
+  'vector',
+  TRUE,
+  'default_graph',
+  'Reserved space for vector RAG and future graph RAG.'
+)
+ON CONFLICT (space_key) DO NOTHING;
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_created_at
+  ON edge_ingest.agent_runs (agent, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_user_created_at
+  ON edge_ingest.agent_runs (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_line_push_messages_status_created_at
+  ON edge_ingest.line_push_messages (status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_line_push_messages_user_created_at
+  ON edge_ingest.line_push_messages (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_user_queries_user_asked_at
+  ON edge_ingest.user_queries (user_id, asked_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_user_daily_usage_user_date
+  ON edge_ingest.user_daily_question_usage (user_id, usage_date DESC);
