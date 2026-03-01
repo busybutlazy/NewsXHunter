@@ -1,14 +1,13 @@
 import json
-import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict
-from urllib import error, request
 
 from app.adapters.repos.agent_run_repo import AgentRunRepo
 from app.adapters.repos.line_delivery_repo import LineDeliveryRepo
 from app.config import get_llm_config_by_tenant
 from app.services.llm_gateway import LLMGateway, TenantConfig
+from app.services.line_messaging_service import LineMessagingService
 
 
 class BardAgentService:
@@ -20,12 +19,14 @@ class BardAgentService:
         tenant_id: str = "default",
         prompt_version: str = "bard-v1",
         gateway: LLMGateway | None = None,
+        line_messaging: LineMessagingService | None = None,
     ):
         self.line_repo = line_repo
         self.run_repo = run_repo
         self.tenant_id = tenant_id
         self.prompt_version = prompt_version
         self.gateway = gateway or LLMGateway()
+        self.line_messaging = line_messaging or LineMessagingService()
         self.tenant_cfg = TenantConfig(**get_llm_config_by_tenant(tenant_id))
         self.gateway.register_tenant(self.tenant_cfg)
 
@@ -95,7 +96,7 @@ class BardAgentService:
         payload = {"messages": [{"type": "text", "text": final_body}]}
 
         if send:
-            delivery = self._push_to_line(line_user_id=line_user_id, message=final_body)
+            delivery = self.line_messaging.push_text(line_user_id=line_user_id, message=final_body)
             delivery_status = "SENT" if delivery["ok"] else "FAILED"
             line_request_id = delivery.get("line_request_id")
             delivery_error = delivery.get("error")
@@ -148,39 +149,6 @@ class BardAgentService:
         message_body = str(parsed.get("message_body") or f"{summary}\n\n{url}").strip()
         usage = self._extract_token_usage(out_msg)
         return {"title": message_title, "message_body": message_body}, usage
-
-    def _push_to_line(self, *, line_user_id: str, message: str) -> Dict[str, Any]:
-        token = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-        if not token:
-            return {"ok": False, "error": "LINE_CHANNEL_ACCESS_TOKEN is missing"}
-
-        endpoint = "https://api.line.me/v2/bot/message/push"
-        payload = {
-            "to": line_user_id,
-            "messages": [{"type": "text", "text": message[:5000]}],
-        }
-        data = json.dumps(payload).encode("utf-8")
-        req = request.Request(
-            endpoint,
-            method="POST",
-            data=data,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-        )
-        try:
-            with request.urlopen(req, timeout=20) as resp:
-                return {
-                    "ok": 200 <= resp.status < 300,
-                    "status_code": resp.status,
-                    "line_request_id": resp.headers.get("x-line-request-id"),
-                }
-        except error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="ignore")
-            return {"ok": False, "error": f"http_{exc.code}:{body}"}
-        except Exception as exc:
-            return {"ok": False, "error": str(exc)}
 
     def _safe_parse_json(self, text: str) -> Dict[str, Any]:
         payload = (text or "").strip()
