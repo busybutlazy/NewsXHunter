@@ -317,3 +317,18 @@ CREATE INDEX IF NOT EXISTS idx_user_queries_user_asked_at
 
 CREATE INDEX IF NOT EXISTS idx_user_daily_usage_user_date
   ON edge_ingest.user_daily_question_usage (user_id, usage_date DESC);
+
+CREATE TABLE IF NOT EXISTS edge_ingest.line_webhook_events (
+  id                BIGSERIAL PRIMARY KEY,
+  line_event_id     TEXT NOT NULL UNIQUE,
+  event_type        TEXT NOT NULL,
+  line_user_id      TEXT,
+  payload           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_line_webhook_events_created_at
+  ON edge_ingest.line_webhook_events (created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_line_webhook_events_user_created_at
+  ON edge_ingest.line_webhook_events (line_user_id, created_at DESC);
